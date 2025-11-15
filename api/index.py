@@ -1,12 +1,17 @@
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
-from openai import OpenAI
-from dotenv import load_dotenv
 import os
+import json
+from urllib import request, error
 
-load_dotenv()
+# Load .env locally if available; Vercel uses project env vars
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
@@ -21,18 +26,46 @@ def index():
     </form>
     """
 
-@app.post("/chat", response_class=HTMLResponse)
-def chat(user_message: str = Form(...)):
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
+
+def get_coach_reply(user_message: str) -> str:
+    if not OPENAI_API_KEY:
+        return "Missing OPENAI_API_KEY. Set it in your environment."
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
             {"role": "system", "content": "You are a supportive mental coach who helps overwhelmed people feel calmer."},
             {"role": "user", "content": user_message},
-        ]
+        ],
+    }
+
+    req = request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
     )
 
-    coach_reply = response.choices[0].message.content
+    try:
+        with request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"]
+    except error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8")
+        except Exception:
+            body = str(e)
+        return f"OpenAI API error: {e.code} {e.reason}\n{body}"
+    except Exception as e:
+        return f"Request failed: {e}"
 
+
+@app.post("/chat", response_class=HTMLResponse)
+def chat(user_message: str = Form(...)):
+    coach_reply = get_coach_reply(user_message)
     return f"""
     <h2>🔥 Hot Mess Coach Says</h2>
     <div style="white-space: pre-wrap; border: 1px solid #ccc; padding: 12px; border-radius: 8px;">
